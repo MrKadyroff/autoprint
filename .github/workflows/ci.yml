@@ -1,0 +1,19 @@
+name: CI Build
+
+# Быстрая проверка компиляции на ветках и PR (без публикации релиза).
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet restore
+      - run: dotnet build -c Release --no-restore

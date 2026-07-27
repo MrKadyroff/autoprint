@@ -1,0 +1,12 @@
+# Автонормализация переводов строк для текста
+* text=auto
+
+# Явно бинарные файлы — не трогать (иначе инсталляторы драйверов повредятся)
+*.exe binary
+*.dll binary
+*.pdb binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.zip binary

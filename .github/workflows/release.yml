@@ -1,0 +1,96 @@
+name: Build & Release
+
+# GitOps-модель:
+#   • Бампаешь <Version> в AutoPrint.csproj и пушишь в main
+#     → workflow сам собирает, пакует портативный .zip и публикует GitHub Release
+#       с тегом v{version}. Если релиз с такой версией уже есть — шаг пропускается.
+#   • Автоапдейтер в приложении читает releases/latest и обновляется сам.
+#   • Можно запустить вручную (workflow_dispatch) с force=true.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**.cs'
+      - '**.xaml'
+      - '**.csproj'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Собрать релиз даже если тег уже существует'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # нужно для создания тега и релиза
+
+jobs:
+  release:
+    runs-on: windows-latest   # WPF (net8.0-windows) собирается только на Windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # нужны все теги для проверки существования
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Достаём версию из csproj и решаем, нужен ли релиз.
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          [xml]$csproj = Get-Content AutoPrint.csproj
+          $version = ($csproj.Project.PropertyGroup | Where-Object { $_.Version }).Version
+          if (-not $version) { Write-Error "В AutoPrint.csproj не задан <Version>"; exit 1 }
+          $tag = "v$version"
+          git fetch --tags --quiet
+          $exists = (git tag -l $tag)
+          $force = "${{ github.event.inputs.force }}" -eq "true"
+          $should = ([string]::IsNullOrEmpty($exists)) -or $force
+          "version=$version"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"             | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "should_release=$($should.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Version=$version Tag=$tag Exists=$exists Force=$force -> should_release=$should"
+
+      - name: Restore
+        if: steps.ver.outputs.should_release == 'true'
+        run: dotnet restore
+
+      # Портативная self-contained сборка: zip полностью самодостаточен,
+      # автоапдейтер просто подменяет файлы (без зависимости от рантайма на ПК кассы).
+      - name: Publish (win-x64, self-contained)
+        if: steps.ver.outputs.should_release == 'true'
+        run: >
+          dotnet publish AutoPrint.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:Version=${{ steps.ver.outputs.version }}
+          -o publish
+
+      - name: Package ZIP
+        if: steps.ver.outputs.should_release == 'true'
+        shell: pwsh
+        run: |
+          $zip = "AutoPrint-${{ steps.ver.outputs.version }}-portable.zip"
+          Compress-Archive -Path "publish\*" -DestinationPath $zip -Force
+          "asset=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: pkg
+
+      - name: Create GitHub Release
+        if: steps.ver.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: AutoPrint ${{ steps.ver.outputs.version }}
+          generate_release_notes: true   # авто-описание из коммитов/PR
+          files: ${{ steps.pkg.outputs.asset }}
+          make_latest: 'true'            # releases/latest → его читает автоапдейтер
+
+      - name: Skipped
+        if: steps.ver.outputs.should_release != 'true'
+        run: echo "Релиз ${{ steps.ver.outputs.tag }} уже существует — пропуск. Бампните <Version> в csproj."

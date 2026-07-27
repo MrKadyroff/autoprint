@@ -1,0 +1,22 @@
+# .NET build output
+bin/
+obj/
+publish/
+*.user
+*.suo
+
+# Rider / VS
+.vs/
+.idea/
+
+# Packaging artefacts
+*.zip
+
+# Локальные драйверы больше 50МБ можно не коммитить — но они нужны для установки,
+# поэтому НЕ игнорируем DriverInstall.exe / Normal POS Driver*.exe (см. README).
+
+# Логи / временное
+*.log
+
+# Собранный exe слишком большой для GitHub (>100МБ)
+dist/AutoPrint.exe
