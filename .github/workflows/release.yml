@@ -1,7 +1,7 @@
 name: Build & Release
 
 # GitOps-модель:
-#   • Бампаешь <Version> в AutoPrint.csproj и пушишь в main
+#   • Бампаешь <Version> в AutoPrint.csproj и пушишь в master
 #     → workflow сам собирает, пакует портативный .zip и публикует GitHub Release
 #       с тегом v{version}. Если релиз с такой версией уже есть — шаг пропускается.
 #   • Автоапдейтер в приложении читает releases/latest и обновляется сам.
@@ -9,7 +9,7 @@ name: Build & Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - '**.cs'
       - '**.xaml'
