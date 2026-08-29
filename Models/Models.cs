@@ -157,6 +157,8 @@ public class PrintJob
     public ReceiptKind Kind { get; set; } = ReceiptKind.Normal;
     /// <summary>Имя принтера из запроса ("printer"). Пусто — печать на выбранную в приложении цель.</summary>
     public string PrinterName { get; set; } = "";
+    /// <summary>Организация из чека ("orgName"). Пусто — в истории показываем ECASH по умолчанию.</summary>
+    public string OrgName { get; set; } = "";
 }
 
 /// <summary>Способ подключения принтера.</summary>

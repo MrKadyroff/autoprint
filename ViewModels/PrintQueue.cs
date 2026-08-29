@@ -44,8 +44,11 @@ public class PrintQueueItem : ViewModelBase
         ReceiptKind.Deposit => "КАССА ＋ внесение",
         ReceiptKind.Withdrawal => "КАССА − изъятие",
         ReceiptKind.Report => "ОТЧЁТ",
-        _ => ""
+        _ => "Операционный"
     };
+
+    /// <summary>Организация чека — из запроса ("orgName"), иначе ECASH по умолчанию.</summary>
+    public string OrgLabel => string.IsNullOrWhiteSpace(Job.OrgName) ? "ECASH" : Job.OrgName;
 
     private JobStatus _status = JobStatus.Queued;
     public JobStatus Status
@@ -76,7 +79,7 @@ public class PrintQueueItem : ViewModelBase
     private string _lastError = "";
     public string LastError { get => _lastError; set { SetField(ref _lastError, value); OnPropertyChanged(nameof(Title)); } }
 
-    public string Title => $"#{Id} · {Job.Format} · {Job.Source} · {QueuedAt:dd.MM HH:mm:ss}"
+    public string Title => $"#{Id} · {KindLabel} · {OrgLabel} · {QueuedAt:dd.MM HH:mm:ss}"
                            + (Attempts > 1 ? $" · попыток: {Attempts}" : "")
                            + (string.IsNullOrEmpty(LastError) ? "" : $"  ⚠ {LastError}");
 
@@ -155,6 +158,12 @@ public class PrintQueueManager
     }
     private Action<string>? _notify;
     private readonly List<string> _pending = new();
+
+    /// <summary>Задание окончательно провалилось (исчерпаны попытки) — UI может показать модалку с причиной.</summary>
+    public event Action<PrintQueueItem>? JobFailedPermanently;
+
+    /// <summary>Принтер не готов, а задание ждёт в очереди — UI может подсказать пользователю подключить принтер.</summary>
+    public event Action? PrinterNotReadyWhileQueued;
 
     private void Say(string message)
     {
@@ -359,7 +368,11 @@ public class PrintQueueManager
                     }
 
                     // Принтер не готов / печать не настроена — ждём, попытки не тратим.
-                    if (PrintCallback is null || CanPrint?.Invoke() == false) break;
+                    if (PrintCallback is null || CanPrint?.Invoke() == false)
+                    {
+                        PrinterNotReadyWhileQueued?.Invoke();
+                        break;
+                    }
 
                     item.Status = JobStatus.Printing;
                     Persist(item);
@@ -393,6 +406,7 @@ public class PrintQueueManager
                             item.Status = JobStatus.Failed;
                             Persist(item);
                             Say($"Задание #{item.Id} — ошибка после {item.Attempts} попыток: {ex.Message}");
+                            JobFailedPermanently?.Invoke(item);
                         }
                         else
                         {

@@ -14,6 +14,11 @@ public class AppConfig
     public string UpdateRepo { get; set; } = "autoprint";
     public bool AllowPrerelease { get; set; } = false;
 
+    /// <summary>Автоматически проверять и ставить обновления в фоне, без участия пользователя.</summary>
+    public bool AutoUpdateEnabled { get; set; } = true;
+    /// <summary>Как часто проверять обновления в фоне (часы).</summary>
+    public double AutoUpdateCheckHours { get; set; } = 4;
+
     // ---- Сохраняемые настройки геометрии ленты, шрифтов и QR ----
     public double TapeWidthMm { get; set; } = 80;
     public double SideMarginsPx { get; set; } = 12;

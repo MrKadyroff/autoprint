@@ -179,7 +179,8 @@ public class PrintServer
             {
                 Format = fmt, RawImage = fileBytes, Source = "autoPrint",
                 PrinterName = printer,
-                Kind = DetectKind(kind, scanText)
+                Kind = DetectKind(kind, scanText),
+                OrgName = FirstNonEmpty(ExtractOrgName(text), ExtractOrgName(scanText))
             };
         }
 
@@ -189,8 +190,26 @@ public class PrintServer
         {
             Format = format, Payload = text, Source = "network",
             PrinterName = ExtractPrinter(text),
-            Kind = DetectKind(null, text)     // сканируем содержимое на ключевые слова смены
+            Kind = DetectKind(null, text),    // сканируем содержимое на ключевые слова смены
+            OrgName = ExtractOrgName(text)
         };
+    }
+
+    private static string FirstNonEmpty(string a, string b) => string.IsNullOrWhiteSpace(a) ? b : a;
+
+    /// <summary>Достаёт название организации ("orgName") из JSON, если это JSON-конверт.</summary>
+    private static string ExtractOrgName(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || !json.TrimStart().StartsWith("{")) return "";
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("orgName", out var oe)
+                && oe.ValueKind == System.Text.Json.JsonValueKind.String)
+                return oe.GetString()?.Trim() ?? "";
+        }
+        catch { /* не JSON */ }
+        return "";
     }
 
     /// <summary>Достаёт имя принтера ("printer"/"printerName") из JSON, если это JSON-конверт.</summary>

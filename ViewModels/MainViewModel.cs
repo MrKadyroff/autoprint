@@ -61,6 +61,7 @@ public class MainViewModel : ViewModelBase
         _updater = new UpdateService(_config);
         CheckUpdateCommand = new AsyncRelayCommand(CheckUpdateAsync, () => !IsUpdateBusy);
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, () => UpdateAvailable && !IsUpdateBusy);
+        StartAutoUpdateTimer();
         PauseResumeQueueCommand = new RelayCommand(ToggleQueuePause);
         ClearQueueCommand = new RelayCommand(() => Queue.ClearFinished());
         CancelJobCommand = new RelayCommand(o => { if (o is PrintQueueItem it) Queue.Cancel(it); });
@@ -75,6 +76,8 @@ public class MainViewModel : ViewModelBase
         Queue.CanPrint = () => HasPrinter;
         Queue.Notify = msg => Application.Current.Dispatcher.Invoke(() => { Notify(msg); AppendLog("[QUEUE] " + msg); });
         Queue.PausedChanged += _ => OnPropertyChanged(nameof(QueuePauseLabel));
+        Queue.JobFailedPermanently += item => Application.Current.Dispatcher.Invoke(() => ShowJobFailedDialog(item));
+        Queue.PrinterNotReadyWhileQueued += () => Application.Current.Dispatcher.Invoke(ShowPrinterNotReadyDialog);
 
         DiscoverDrivers();
 
@@ -365,11 +368,40 @@ public class MainViewModel : ViewModelBase
         Notify($"Шаблон «{SelectedDocType?.Label}» сброшен к стандартному.");
     }
 
+    /// <summary>Сопоставляет тип фискального документа с категорией истории печати.</summary>
+    private static ReceiptKind ReceiptKindFrom(FiscalDocType t) => t switch
+    {
+        FiscalDocType.ShiftOpen  => ReceiptKind.ShiftOpen,
+        FiscalDocType.ShiftClose => ReceiptKind.ShiftClose,
+        FiscalDocType.Deposit    => ReceiptKind.Deposit,
+        FiscalDocType.Withdrawal => ReceiptKind.Withdrawal,
+        _                        => ReceiptKind.Normal
+    };
+
+    /// <summary>Достаёт "orgName" из JSON-чека для отображения в истории (пусто, если нет/не JSON).</summary>
+    private static string ExtractOrgNameFromJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || !json.TrimStart().StartsWith("{")) return "";
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("orgName", out var oe)
+                && oe.ValueKind == System.Text.Json.JsonValueKind.String)
+                return oe.GetString()?.Trim() ?? "";
+        }
+        catch { /* не JSON */ }
+        return "";
+    }
+
     private async Task TestPrintTypeAsync()
     {
         // Печать идёт через конвейер, который берёт шаблон из хранилища — сохраняем текущий.
         TemplateStore.Save(_editingType, CurrentTemplate());
-        var job = new PrintJob { Format = ReceiptFormat.Json, Payload = JsonInput, Source = "тест-тип" };
+        var job = new PrintJob
+        {
+            Format = ReceiptFormat.Json, Payload = JsonInput, Source = "тест-тип",
+            Kind = ReceiptKindFrom(_editingType), OrgName = ExtractOrgNameFromJson(JsonInput)
+        };
         var item = Queue.Enqueue(job, Geometry.Clone());
         Notify(HasPrinter
             ? $"Тест «{SelectedDocType?.Label}» в очереди (#{item.Id})."
@@ -688,7 +720,8 @@ public class MainViewModel : ViewModelBase
         {
             ReceiptFormat.Html  => new PrintJob { Format = ReceiptFormat.Html,  Payload = HtmlInput, Source = "эмулятор" },
             ReceiptFormat.Image => new PrintJob { Format = ReceiptFormat.Image, RawImage = _imageBytes, Source = "эмулятор" },
-            _                   => new PrintJob { Format = ReceiptFormat.Json,  Payload = JsonInput, Source = "эмулятор" },
+            _                   => new PrintJob { Format = ReceiptFormat.Json,  Payload = JsonInput, Source = "эмулятор",
+                                                   Kind = ReceiptKindFrom(_editingType), OrgName = ExtractOrgNameFromJson(JsonInput) },
         };
 
         AppendLog($"[NET] ← Перехвачен веб-запрос ({job.Format}, {job.Source})");
@@ -1027,6 +1060,74 @@ public class MainViewModel : ViewModelBase
         }
     }
 
+    // ---- Автообновление в фоне (без участия пользователя) ----
+    private System.Windows.Threading.DispatcherTimer? _autoUpdateTimer;
+
+    /// <summary>
+    /// Запускает периодическую фоновую проверку обновлений. Первая проверка — через минуту
+    /// после старта (не мешать первому запуску приложения), дальше — раз в AutoUpdateCheckHours.
+    /// </summary>
+    private void StartAutoUpdateTimer()
+    {
+        if (!_config.AutoUpdateEnabled) return;
+
+        _autoUpdateTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMinutes(1)
+        };
+        _autoUpdateTimer.Tick += async (_, _) =>
+        {
+            _autoUpdateTimer!.Stop();
+            await AutoUpdateCheckAsync();
+            _autoUpdateTimer.Interval = TimeSpan.FromHours(Math.Max(0.5, _config.AutoUpdateCheckHours));
+            _autoUpdateTimer.Start();
+        };
+        _autoUpdateTimer.Start();
+    }
+
+    /// <summary>
+    /// Тихая проверка + установка обновления. Не трогает, если пользователь занят диалогом
+    /// обновлений (IsUpdateBusy) или прямо сейчас идёт печать — иначе задание оборвётся
+    /// перезапуском приложения. Если печать активна, откладывает установку до следующей проверки.
+    /// </summary>
+    private async Task AutoUpdateCheckAsync()
+    {
+        if (IsUpdateBusy) return;
+        try
+        {
+            var info = await _updater.CheckAsync();
+            AppendLog($"[UPD] Фоновая проверка: latest={info.Tag} newer={UpdateService.IsNewer(info)}");
+            if (!UpdateService.IsNewer(info) || !info.HasAsset) return;
+
+            _latestUpdate = info;
+            UpdateAvailable = true;
+            UpdateStatus = $"Доступна версия {info.Version} ({info.Tag}). Устанавливаю автоматически…";
+            UpdateNotes = info.Notes;
+
+            bool printingNow = Queue.Items.Any(i => i.Status == JobStatus.Printing);
+            if (printingNow)
+            {
+                AppendLog("[UPD] Обновление отложено — сейчас идёт печать.");
+                return;
+            }
+
+            AppendLog($"[UPD] Автообновление: скачиваю {info.Tag}…");
+            IsUpdateBusy = true;
+            var progress = new Progress<double>(p => UpdateProgress = Math.Round(p * 100));
+            string path = await _updater.DownloadAsync(info, progress);
+
+            Notify($"Установлена новая версия {info.Version} — приложение перезапускается…");
+            AppendLog($"[UPD] Автообновление: установка {info.Tag}, перезапуск…");
+            _updater.ApplyAndRestart(info, path);
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[UPD] Фоновая проверка не удалась: {ex.Message}");
+            IsUpdateBusy = false;
+        }
+    }
+
     // Дебаунс превью: слайдеры геометрии/шрифтов/QR при таскании дёргают рендер десятки раз;
     // коалесцируем в один рендер через короткую паузу простоя.
     private System.Windows.Threading.DispatcherTimer? _previewDebounce;
@@ -1209,6 +1310,27 @@ public class MainViewModel : ViewModelBase
             IsImageFormat = true;
             _ = UpdatePreviewAsync();
         }
+    }
+
+    // ================= МОДАЛКИ ОШИБОК ПЕЧАТИ =================
+    private DateTime _lastNotReadyDialogAt = DateTime.MinValue;
+    private static readonly TimeSpan NotReadyDialogCooldown = TimeSpan.FromSeconds(30);
+
+    /// <summary>Задание окончательно не напечаталось — показываем причину и что делать.</summary>
+    private void ShowJobFailedDialog(PrintQueueItem item)
+    {
+        Views.ErrorDialogWindow.ShowFor(item.LastError, showRetry: true, onRetry: () => Queue.Retry(item));
+    }
+
+    /// <summary>
+    /// Принтер не подключён/не готов, а в очереди есть задания — подсказываем один раз
+    /// в NotReadyDialogCooldown, чтобы не заваливать пользователя окнами при пачке входящих чеков.
+    /// </summary>
+    private void ShowPrinterNotReadyDialog()
+    {
+        if (DateTime.Now - _lastNotReadyDialogAt < NotReadyDialogCooldown) return;
+        _lastNotReadyDialogAt = DateTime.Now;
+        Views.ErrorDialogWindow.ShowFor("принтер не подключён");
     }
 
     // ================= ВСПОМОГАТЕЛЬНОЕ =================

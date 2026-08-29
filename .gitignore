@@ -20,3 +20,11 @@ publish/
 
 # Собранный exe слишком большой для GitHub (>100МБ)
 dist/AutoPrint.exe
+
+# dist/ — только portable-набор для ручной раздачи (exe игнорится выше, pdb/Drivers/LICENSE трекаются).
+# Self-contained `dotnet publish` тащит сюда весь рантайм .NET/WPF (сотни dll) — игнорируем всё лишнее.
+dist/*
+!dist/AutoPrint.pdb
+!dist/LICENSE
+!dist/Drivers/
+!dist/Drivers/**
