@@ -25,8 +25,13 @@ public class PrintServer
     public int Port { get; private set; }
     public bool IsRunning => _listener?.IsListening == true;
 
-    /// <summary>Событие поднимается при поступлении корректного задания печати.</summary>
-    public event Action<PrintJob>? JobReceived;
+    /// <summary>
+    /// Событие поднимается при поступлении корректного задания печати. Обработчик должен
+    /// вернуть true только после того, как задание реально и надёжно сохранено (например,
+    /// в персистентной очереди печати) — иначе фронт получит "успех" на запрос, который
+    /// фактически потерялся, и не будет знать, что нужно повторить попытку.
+    /// </summary>
+    public event Func<PrintJob, bool>? JobReceived;
     /// <summary>Диагностические сообщения (для лога в UI).</summary>
     public event Action<string>? Log;
 
@@ -134,8 +139,15 @@ public class PrintServer
             if (req.HttpMethod == "POST" && path is "/print" or "/autoprint" or "")
             {
                 var job = await ReadJob(req);
-                JobReceived?.Invoke(job);
-                await WriteText(res, 200, "{\"status\":\"accepted\"}");
+                // JobReceived гарантированно кладёт задание в персистентную очередь ДО того,
+                // как вернуть true — только тогда фронту можно честно отвечать "accepted".
+                // Если обработчика нет или он вернул false — задание не сохранено, и фронт
+                // должен увидеть ошибку (500), а не тихий "успех" по несуществующей заявке.
+                bool accepted = JobReceived?.Invoke(job) ?? false;
+                if (accepted)
+                    await WriteText(res, 200, "{\"status\":\"accepted\"}");
+                else
+                    await WriteText(res, 500, "{\"status\":\"error\",\"message\":\"job not queued\"}");
                 return;
             }
 
@@ -156,13 +168,21 @@ public class PrintServer
     {
         string ct = (req.ContentType ?? "").ToLowerInvariant();
 
+        // Фронт может передать идентификатор запроса заголовком — удобно для дедупликации,
+        // если тело не JSON (например, бинарная картинка) и в него requestId не положить.
+        string headerReqId = (req.Headers["X-Request-Id"] ?? req.Headers["Idempotency-Key"] ?? "").Trim();
+
         using var ms = new MemoryStream();
         await req.InputStream.CopyToAsync(ms);
         byte[] body = ms.ToArray();
 
         // Бинарная картинка напрямую (Content-Type: image/*)
         if (ct.Contains("image/"))
-            return new PrintJob { Format = DetectBinaryFormat(body), RawImage = body, Source = "network" };
+            return new PrintJob
+            {
+                Format = DetectBinaryFormat(body), RawImage = body, Source = "network",
+                RequestId = headerReqId
+            };
 
         string text = (req.ContentEncoding ?? Encoding.UTF8).GetString(body);
 
@@ -180,7 +200,8 @@ public class PrintServer
                 Format = fmt, RawImage = fileBytes, Source = "autoPrint",
                 PrinterName = printer,
                 Kind = DetectKind(kind, scanText),
-                OrgName = FirstNonEmpty(ExtractOrgName(text), ExtractOrgName(scanText))
+                OrgName = FirstNonEmpty(ExtractOrgName(text), ExtractOrgName(scanText)),
+                RequestId = FirstNonEmpty(ExtractRequestId(text), headerReqId)
             };
         }
 
@@ -191,7 +212,8 @@ public class PrintServer
             Format = format, Payload = text, Source = "network",
             PrinterName = ExtractPrinter(text),
             Kind = DetectKind(null, text),    // сканируем содержимое на ключевые слова смены
-            OrgName = ExtractOrgName(text)
+            OrgName = ExtractOrgName(text),
+            RequestId = FirstNonEmpty(ExtractRequestId(text), headerReqId)
         };
     }
 
@@ -223,6 +245,22 @@ public class PrintServer
                 if (doc.RootElement.TryGetProperty(pk, out var pe)
                     && pe.ValueKind == System.Text.Json.JsonValueKind.String)
                     return pe.GetString()?.Trim() ?? "";
+        }
+        catch { /* не JSON */ }
+        return "";
+    }
+
+    /// <summary>Достаёт идентификатор запроса ("requestId"/"request_id"/"idempotencyKey") из JSON.</summary>
+    private static string ExtractRequestId(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || !json.TrimStart().StartsWith("{")) return "";
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            foreach (var rk in new[] { "requestId", "request_id", "idempotencyKey", "clientRequestId" })
+                if (doc.RootElement.TryGetProperty(rk, out var re)
+                    && re.ValueKind == System.Text.Json.JsonValueKind.String)
+                    return re.GetString()?.Trim() ?? "";
         }
         catch { /* не JSON */ }
         return "";

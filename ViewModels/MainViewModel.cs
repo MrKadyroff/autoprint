@@ -489,6 +489,24 @@ public class MainViewModel : ViewModelBase
     /// <summary>Переименовывать ли принтер после установки драйвера.</summary>
     public bool AutoNamePrinter { get => _autoNamePrinter; set => SetField(ref _autoNamePrinter, value); }
 
+    /// <summary>
+    /// Источник истины — сама запись в реестре (HKCU\...\Run), а не отдельный флаг в конфиге:
+    /// так тумблер всегда показывает то, что реально произойдёт при следующей загрузке Windows,
+    /// даже если запись была снята/добавлена вручную.
+    /// </summary>
+    public bool AutoStartWithWindows
+    {
+        get => AutostartService.IsEnabled();
+        set
+        {
+            AutostartService.SetEnabled(value);
+            OnPropertyChanged();
+            Notify(value
+                ? "AutoPrint будет запускаться при включении компьютера (свёрнутым в трей)."
+                : "Автозапуск с Windows отключён.");
+        }
+    }
+
     public bool HasDrivers => Drivers.Count > 0;
 
     private void DiscoverDrivers()
@@ -731,21 +749,54 @@ public class MainViewModel : ViewModelBase
     }
 
     // ---- Приём реального задания из сети (в UI-поток) ----
-    private void OnJobReceivedFromNetwork(PrintJob job)
+    //
+    // ВАЖНО: раньше здесь был Dispatcher.Invoke(async () => { ... Queue.Enqueue(...); }).
+    // Это "async void" по семантике: если ЛЮБОЙ шаг до Queue.Enqueue (подбор шаблона,
+    // подбор принтера, рендер превью) бросал исключение — например, сразу после старта
+    // Windows, пока служба спулера/список принтеров ещё не готовы, — оно не долетало
+    // до вызывающего кода, а улетало в App.OnDispatcherException и молча гасилось
+    // (Handled = true, только запись в файловый лог). При этом HTTP-сервер уже успевал
+    // ответить фронту 200 "accepted" — заявка исчезала БЕЗ следа в очереди и без ошибки
+    // на фронте. Поэтому теперь Enqueue делается синхронно и первым делом, а всё
+    // остальное — уже поверх гарантированно сохранённого задания, в своём try/catch.
+    private bool OnJobReceivedFromNetwork(PrintJob job)
     {
-        Application.Current.Dispatcher.Invoke(async () =>
+        PrintQueueItem item;
+        try
         {
-            AppendLog($"[NET] ← {job.Format} с порта {_server.Port}");
-            if (job.Format is ReceiptFormat.Image or ReceiptFormat.Pdf)
-                AppendLog("[FMT] Чек пришёл готовой картинкой/PDF: размер шрифта задаётся на фронте " +
-                          "(в пикселях его не изменить). Из настроек применяются боковые отступы, отрез и ящик. " +
-                          "Чтобы управлять шрифтами из приложения — присылайте чек JSON-шаблоном.");
-            LogTemplateResolution(job);          // какой шаблон применится к этому чеку
-            ApplyRequestedPrinter(job);          // печать на принтер, указанный в запросе
-            await RenderJobToPreviewAsync(job);
-            var item = Queue.Enqueue(job, Geometry.Clone());
-            Notify($"Входящий чек #{item.Id} ({job.Format}) поставлен в очередь.");
+            item = Application.Current.Dispatcher.Invoke(() => Queue.Enqueue(job, Geometry.Clone()));
+        }
+        catch (Exception ex)
+        {
+            // Сюда попасть практически невозможно (Enqueue не делает ничего рискованного),
+            // но если всё же случится — сообщаем об этом фронту (500), а не тихим "успехом".
+            FileLog.Error("OnJobReceivedFromNetwork.Enqueue", ex);
+            return false;
+        }
+
+        Application.Current.Dispatcher.InvokeAsync(async () =>
+        {
+            try
+            {
+                AppendLog($"[NET] ← {job.Format} с порта {_server.Port}");
+                if (job.Format is ReceiptFormat.Image or ReceiptFormat.Pdf)
+                    AppendLog("[FMT] Чек пришёл готовой картинкой/PDF: размер шрифта задаётся на фронте " +
+                              "(в пикселях его не изменить). Из настроек применяются боковые отступы, отрез и ящик. " +
+                              "Чтобы управлять шрифтами из приложения — присылайте чек JSON-шаблоном.");
+                LogTemplateResolution(job);          // какой шаблон применится к этому чеку
+                ApplyRequestedPrinter(job);          // печать на принтер, указанный в запросе
+                await RenderJobToPreviewAsync(job);
+                Notify($"Входящий чек #{item.Id} ({job.Format}) поставлен в очередь.");
+            }
+            catch (Exception ex)
+            {
+                // Задание УЖЕ в очереди и уже будет напечатано — эта ветка влияет только
+                // на превью/лог/автоподбор принтера, поэтому падать здесь можно спокойно.
+                FileLog.Error("OnJobReceivedFromNetwork.PostProcess", ex);
+            }
         });
+
+        return true;
     }
 
     /// <summary>

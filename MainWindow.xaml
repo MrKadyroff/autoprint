@@ -171,6 +171,17 @@
 
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="Автозапуск"/>
+                            <CheckBox Content="Запускать при включении компьютера"
+                                      IsChecked="{Binding AutoStartWithWindows}"
+                                      Foreground="{StaticResource TextPrimary}"/>
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                                       Text="Через реестр (HKCU), без ярлыка в папке автозагрузки — переживает переустановку/обновление. При автозапуске окно сразу сворачивается в трей, принт-сервер работает в фоне."/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
                             <TextBlock Style="{StaticResource SectionTitle}" Text="Сеть и порт"/>
                             <TextBlock Style="{StaticResource Caption}" Text="TCP/HTTP порт службы"/>
                             <Grid>

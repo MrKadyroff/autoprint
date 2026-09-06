@@ -42,6 +42,16 @@ public partial class App : Application
 
         FileLog.CleanupOldLogs();
         FileLog.Info($"=== Запуск AutoPrint {UpdateService.CurrentVersion} ===");
+
+        // Раньше MainWindow создавался неявно через StartupUri, поэтому он всегда
+        // появлялся на экране. Автозапуск с Windows (AutostartService) стартует процесс
+        // с флагом --minimized — окно в этом случае не должно выскакивать поверх
+        // рабочего стола при каждом включении компьютера, а сразу уходить в трей.
+        var window = new MainWindow();
+        MainWindow = window;
+        window.Show();
+        if (e.Args.Contains(AutostartService.MinimizedArg, StringComparer.OrdinalIgnoreCase))
+            window.Hide();
     }
 
     private void OnDispatcherException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -107,7 +117,10 @@ public partial class App : Application
             if (!string.IsNullOrEmpty(exe))
             {
                 FileLog.Info("Автоперезапуск приложения…");
-                Process.Start(new ProcessStartInfo { FileName = exe, UseShellExecute = true });
+                // Сохраняем исходные аргументы (в частности --minimized) — иначе перезапуск
+                // после падения посреди автозагрузки внезапно вытащит окно на экран.
+                string args = string.Join(' ', Environment.GetCommandLineArgs().Skip(1));
+                Process.Start(new ProcessStartInfo { FileName = exe, Arguments = args, UseShellExecute = true });
             }
         }
         catch (Exception ex)

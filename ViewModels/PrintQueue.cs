@@ -175,6 +175,14 @@ public class PrintQueueManager
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Окно дедупликации по Job.RequestId: если фронт не дождался ответа (например, порт
+    /// ещё поднимался при старте компьютера) и повторил тот же запрос, второй экземпляр
+    /// с тем же RequestId в пределах этого окна не встаёт в очередь заново — вместо этого
+    /// возвращается уже существующее задание. Пустой RequestId дедупликации не подлежит.
+    /// </summary>
+    public TimeSpan DedupWindow { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Максимальное время на печать одного задания. Если принтер «завис» (спулер не отвечает,
     /// сокет молчит) — по истечении таймаута задание откладывается, а очередь печатает следующее,
     /// не дожидаясь зависшего. Само зависшее задание вернётся к печати после остывания.
@@ -239,6 +247,20 @@ public class PrintQueueManager
 
     public PrintQueueItem Enqueue(PrintJob job, ReceiptGeometry geometry)
     {
+        if (!string.IsNullOrWhiteSpace(job.RequestId))
+        {
+            var cutoff = DateTime.Now - DedupWindow;
+            var dup = Items.FirstOrDefault(i =>
+                i.Status != JobStatus.Canceled
+                && string.Equals(i.Job.RequestId, job.RequestId, StringComparison.Ordinal)
+                && i.QueuedAt >= cutoff);
+            if (dup is not null)
+            {
+                Say($"Повторный запрос (requestId «{job.RequestId}») — уже в очереди как #{dup.Id}, не дублирую.");
+                return dup;
+            }
+        }
+
         var item = new PrintQueueItem(job, geometry);
         Items.Add(item);
         Persist(item);

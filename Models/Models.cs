@@ -159,6 +159,13 @@ public class PrintJob
     public string PrinterName { get; set; } = "";
     /// <summary>Организация из чека ("orgName"). Пусто — в истории показываем ECASH по умолчанию.</summary>
     public string OrgName { get; set; } = "";
+    /// <summary>
+    /// Идентификатор запроса от фронта ("requestId"/"idempotencyKey" и т.п.), опционально.
+    /// Нужен для дедупликации: если фронт не дождался ответа (например, "тихий" сбой на
+    /// старте после загрузки компьютера) и повторил тот же запрос, второй экземпляр с тем
+    /// же RequestId не должен уйти в печать ещё раз.
+    /// </summary>
+    public string RequestId { get; set; } = "";
 }
 
 /// <summary>Способ подключения принтера.</summary>
