@@ -18,20 +18,46 @@ dotnet run
 
 Релизы выходят **автоматически** через GitHub Actions — см. [.github/workflows/release.yml](.github/workflows/release.yml).
 
-Как выпустить новую версию:
-1. Подними версию в [AutoPrint.csproj](AutoPrint.csproj): `<Version>1.1.0</Version>` (и `AssemblyVersion`/`FileVersion`).
-2. Закоммить и запушь в `main`:
-   ```powershell
-   git add -A
-   git commit -m "release: 1.1.0"
-   git push
-   ```
-3. Workflow сам: соберёт `win-x64` self-contained, упакует `AutoPrint-1.1.0-portable.zip`,
-   создаст тег `v1.1.0` и GitHub Release (помеченный как latest).
-4. Приложения у касс через «Проверить обновления» (или автопроверку) увидят релиз и обновятся.
+### Версия поднимается сама
+
+Patch-версию бампает git-хук [.githooks/pre-commit](.githooks/pre-commit): каждый коммит
+поднимает `<Version>` в [AutoPrint.csproj](AutoPrint.csproj) (`1.0.3` → `1.0.4`) и кладёт
+правку в тот же коммит. Правится **только** `<Version>` — `AssemblyVersion`/`FileVersion`
+выводятся из неё; если прибить их гвоздями, приложение будет считать себя старым и
+обновляться по кругу.
+
+Хук живёт в репозитории, но git его сам не подхватывает. Один раз на каждой машине:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+Выпуск версии после этого — обычный коммит и пуш:
+
+```powershell
+git add -A
+git commit -m "fix: ..."     # 1.0.3 -> 1.0.4
+git push
+```
+
+Workflow соберёт `win-x64` self-contained, упакует `AutoPrint-1.0.4-portable.zip`,
+создаст тег `v1.0.4` и GitHub Release (latest). Кассы увидят его через «Проверить
+обновления» или фоновую автопроверку.
+
+Когда бамп не нужен или нужен другой:
+
+| Ситуация | Что делать |
+|---|---|
+| Коммит без релиза (правка README, эксперимент) | `git commit --no-verify` или `AUTOPRINT_NO_BUMP=1 git commit` |
+| Minor/major (`1.0.4` → `1.1.0`) | Поправь `<Version>` руками и застейджи csproj — хук увидит ручную правку и не перебьёт её |
+| Слияние, rebase, cherry-pick | Хук пропускает их сам — иначе каждый rebase конфликтовал бы по строке `<Version>` |
+| Отключить совсем | `git config --unset core.hooksPath` |
 
 > Если версия в csproj не изменилась — тег уже существует, и workflow пропустит публикацию.
 > Ручной перезапуск: вкладка Actions → Build & Release → Run workflow (можно с `force`).
+>
+> Слияние двух веток, где обе бампали версию, даст конфликт в строке `<Version>` —
+> разрешается выбором большего числа.
 
 ## Первичная настройка репозитория
 ```powershell

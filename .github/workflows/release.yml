@@ -1,7 +1,10 @@
 name: Build & Release
 
 # GitOps-модель:
-#   • Бампаешь <Version> в AutoPrint.csproj и пушишь в master
+#   • Версию бампает git-хук .githooks/pre-commit — каждый коммит поднимает patch
+#     в AutoPrint.csproj (включается один раз: git config core.hooksPath .githooks).
+#     Можно поднять и руками — хук ручную правку не перебивает.
+#   • Пушишь в master
 #     → workflow сам собирает, пакует портативный .zip и публикует GitHub Release
 #       с тегом v{version}. Если релиз с такой версией уже есть — шаг пропускается.
 #   • Автоапдейтер в приложении читает releases/latest и обновляется сам.
@@ -70,6 +73,7 @@ jobs:
           dotnet publish AutoPrint.csproj
           -c Release -r win-x64 --self-contained true
           -p:Version=${{ steps.ver.outputs.version }}
+          -p:DebugType=none -p:DebugSymbols=false
           -o publish
 
       - name: Package ZIP

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -15,12 +15,26 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        bool minimized = e.Args.Contains(AutostartService.MinimizedArg, StringComparer.OrdinalIgnoreCase);
+
         // --- Single instance: два сервера на одном порту = гарантированное падение ---
-        _singleInstance = new Mutex(initiallyOwned: true, "AutoPrint.SingleInstance", out bool isNew);
-        if (!isNew)
+        // Ждём освобождения мьютекса, а не выходим сразу: и автоперезапуск после падения,
+        // и апдейтер стартуют новый процесс, пока старый ещё дозавершается. Мгновенный
+        // выход в этом случае означал бы, что приложение просто не поднимется обратно.
+        _singleInstance = new Mutex(initiallyOwned: false, "AutoPrint.SingleInstance");
+        bool acquired;
+        try { acquired = _singleInstance.WaitOne(TimeSpan.FromSeconds(15)); }
+        catch (AbandonedMutexException) { acquired = true; }   // прошлый процесс упал, не отпустив
+        if (!acquired)
         {
-            MessageBox.Show("AutoPrint уже запущен.", "AutoPrint",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            // Из автозагрузки окно показывать некому — молча уходим, чтобы MessageBox
+            // не висел невидимым диалогом на экране логина.
+            if (!minimized)
+                MessageBox.Show("AutoPrint уже запущен.", "AutoPrint",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            FileLog.Info("Запуск отменён: уже работает другой экземпляр.");
+            _singleInstance.Dispose();
+            _singleInstance = null;
             Shutdown();
             return;
         }
@@ -50,8 +64,7 @@ public partial class App : Application
         var window = new MainWindow();
         MainWindow = window;
         window.Show();
-        if (e.Args.Contains(AutostartService.MinimizedArg, StringComparer.OrdinalIgnoreCase))
-            window.Hide();
+        if (minimized) window.Hide();
     }
 
     private void OnDispatcherException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -132,7 +145,8 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         FileLog.Info($"=== Выход AutoPrint (код {e.ApplicationExitCode}) ===");
-        _singleInstance?.ReleaseMutex();
+        try { _singleInstance?.ReleaseMutex(); }
+        catch (ApplicationException) { /* не владели — например, вышли из-за второго экземпляра */ }
         _singleInstance?.Dispose();
         base.OnExit(e);
     }

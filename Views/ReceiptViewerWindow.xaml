@@ -1,0 +1,64 @@
+<Window x:Class="AutoPrint.Views.ReceiptViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Просмотр чека" Height="720" Width="480"
+        MinHeight="420" MinWidth="380"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackground}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Шапка: что за чек -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock x:Name="StatusIconText" FontSize="20" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock x:Name="HeadlineText" FontSize="17" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+            <TextBlock x:Name="SubtitleText" FontSize="12" TextWrapping="Wrap"
+                       Foreground="{StaticResource TextSecondary}"/>
+        </StackPanel>
+
+        <!-- Причина сбоя, если чек не напечатался -->
+        <Border Grid.Row="1" x:Name="ErrorBox" Background="#22F44336" CornerRadius="6"
+                Padding="10,7" Margin="0,0,0,10" Visibility="Collapsed">
+            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{StaticResource DangerBrush}"/>
+        </Border>
+
+        <!-- Лента чека на тёмном "столе" -->
+        <Border Grid.Row="2" Background="#FF2B2B2B" CornerRadius="8" Padding="0,18">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                <Border x:Name="TapeBorder" Background="White" HorizontalAlignment="Center"
+                        SnapsToDevicePixels="True">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.4" Color="Black"/>
+                    </Border.Effect>
+                    <Grid>
+                        <TextBlock x:Name="PreviewTextBlock" Visibility="Collapsed"
+                                   FontFamily="Consolas" Foreground="Black" TextWrapping="NoWrap"/>
+                        <Image x:Name="PreviewImageControl" Visibility="Collapsed"
+                               Stretch="Uniform" SnapsToDevicePixels="True"
+                               RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                        <TextBlock x:Name="BusyText" Text="Готовлю предпросмотр…"
+                                   Foreground="#FF666666" Margin="14" HorizontalAlignment="Center"/>
+                    </Grid>
+                </Border>
+            </ScrollViewer>
+        </Border>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button x:Name="ReprintButton" Content="🖨 Печатать повторно"
+                    Style="{StaticResource AccentButton}" Padding="16,8" Margin="0,0,8,0"
+                    Click="Reprint_Click"/>
+            <Button Content="Закрыть" Style="{StaticResource FluentButton}" Padding="18,8"
+                    Click="Close_Click" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

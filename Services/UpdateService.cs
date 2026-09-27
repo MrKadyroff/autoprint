@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
@@ -121,6 +121,7 @@ public class UpdateService
 
         string tmpDir = Path.Combine(Path.GetTempPath(), "AutoPrint_update");
         Directory.CreateDirectory(tmpDir);
+        CleanupOldDownloads(tmpDir, info.AssetName);
         string dest = Path.Combine(tmpDir, info.AssetName);
 
         using var resp = await Http.GetAsync(info.AssetUrl, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -139,6 +140,21 @@ public class UpdateService
         }
         progress.Report(1.0);
         return dest;
+    }
+
+    /// <summary>
+    /// Удаляет архивы прошлых обновлений. Self-contained сборка весит десятки мегабайт,
+    /// и без уборки %TEMP% на кассе постепенно забивался копиями каждого релиза.
+    /// </summary>
+    private static void CleanupOldDownloads(string tmpDir, string keepName)
+    {
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(tmpDir))
+                if (!string.Equals(Path.GetFileName(f), keepName, StringComparison.OrdinalIgnoreCase))
+                    try { File.Delete(f); } catch { /* занят — удалится в следующий раз */ }
+        }
+        catch { /* уборка не должна мешать обновлению */ }
     }
 
     /// <summary>
@@ -165,39 +181,93 @@ public class UpdateService
         if (Directory.Exists(extract)) Directory.Delete(extract, true);
         ZipFile.ExtractToDirectory(zipPath, extract);
 
-        // Найти папку с AutoPrint.exe (zip может иметь верхнюю папку).
-        string srcDir = Directory.EnumerateFiles(extract, "AutoPrint.exe", SearchOption.AllDirectories)
-                            .Select(Path.GetDirectoryName).FirstOrDefault() ?? extract;
+        // Найти папку с AutoPrint.exe (zip может иметь верхнюю папку, напр. dist\).
+        string? srcDir = Directory.EnumerateFiles(extract, "AutoPrint.exe", SearchOption.AllDirectories)
+                            .Select(Path.GetDirectoryName).FirstOrDefault();
+        if (srcDir is null)
+            throw new InvalidOperationException("В архиве обновления не найден AutoPrint.exe.");
+
         string dstDir = AppContext.BaseDirectory.TrimEnd('\\');
 
+        // Проверяем права ДО выхода из приложения: иначе апдейтер молча не скопирует
+        // файлы (напр. установка в Program Files), приложение перезапустится со старой
+        // версией, и пользователь увидит «обновление не ставится».
+        EnsureWritable(dstDir);
+
+        string log = Path.Combine(tmpDir, "apply_update.log");
         string script = Path.Combine(tmpDir, "apply_update.cmd");
         int pid = Environment.ProcessId;
-        File.WriteAllText(script, BuildUpdaterScript(pid, srcDir!, dstDir, script), Encoding.Default);
+        // Сохраняем аргументы запуска (в частности --minimized): без них тихое фоновое
+        // обновление вытаскивало окно приложения поверх кассового ПО.
+        string args = string.Join(' ', Environment.GetCommandLineArgs().Skip(1)
+                                          .Where(a => !a.Contains('"')));
+        File.WriteAllText(script, BuildUpdaterScript(pid, srcDir, dstDir, log, extract, args),
+                          new UTF8Encoding(false));
 
         Process.Start(new ProcessStartInfo
         {
             FileName = "cmd.exe",
             Arguments = $"/c \"{script}\"",
-            UseShellExecute = true,
+            UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden
         });
     }
 
-    /// <summary>Batch-апдейтер: ждёт завершения процесса по PID, копирует файлы, перезапускает.</summary>
-    private static string BuildUpdaterScript(int pid, string srcDir, string dstDir, string selfPath) => $"""
+    /// <summary>Бросает понятную ошибку, если в папку приложения нельзя писать.</summary>
+    private static void EnsureWritable(string dir)
+    {
+        string probe = Path.Combine(dir, ".update_probe.tmp");
+        try
+        {
+            File.WriteAllText(probe, "x");
+            File.Delete(probe);
+        }
+        catch (Exception ex)
+        {
+            throw new UnauthorizedAccessException(
+                $"Нет прав на запись в папку приложения «{dir}» — обновление невозможно. " +
+                $"Запустите AutoPrint от имени администратора или установите его в папку пользователя. ({ex.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Batch-апдейтер: ждёт завершения процесса по PID, копирует файлы, перезапускает.
+    /// Пишет лог рядом со скриптом — без него неудачное копирование выглядит как
+    /// «обновилось, но версия та же».
+    /// </summary>
+    private static string BuildUpdaterScript(int pid, string srcDir, string dstDir, string logPath,
+                                             string extractRoot, string appArgs) => $"""
         @echo off
+        chcp 65001 >nul
         setlocal
+        set LOG="{logPath}"
+        echo [%date% %time%] updater start pid={pid} > %LOG%
+        set /a tries=0
         :waitloop
-        tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-        if not errorlevel 1 (
-            ping -n 2 127.0.0.1 >nul
-            goto waitloop
+        tasklist /FI "PID eq {pid}" /NH 2>nul | find "{pid}" >nul
+        if errorlevel 1 goto copy
+        set /a tries+=1
+        if %tries% GTR 60 (
+            echo [%date% %time%] ОШИБКА: процесс {pid} не завершился за 60 c >> %LOG%
+            goto restart
         )
         ping -n 2 127.0.0.1 >nul
-        xcopy /E /Y /I "{srcDir}\*" "{dstDir}\" >nul
-        start "" "{dstDir}\AutoPrint.exe"
-        rmdir /S /Q "{Path.GetDirectoryName(srcDir)}" >nul 2>&1
+        goto waitloop
+        :copy
+        ping -n 2 127.0.0.1 >nul
+        echo [%date% %time%] copy "{srcDir}" -^> "{dstDir}" >> %LOG%
+        robocopy "{srcDir}" "{dstDir}" /E /R:5 /W:1 /NFL /NDL /NJH /NJS >> %LOG% 2>&1
+        rem robocopy: код ^>= 8 — реальная ошибка, 0..7 — успех
+        if errorlevel 8 (
+            echo [%date% %time%] ОШИБКА копирования, код %errorlevel% >> %LOG%
+        ) else (
+            echo [%date% %time%] копирование ок, код %errorlevel% >> %LOG%
+        )
+        :restart
+        echo [%date% %time%] restart >> %LOG%
+        start "" "{dstDir}\AutoPrint.exe" {appArgs}
+        rmdir /S /Q "{extractRoot}" >nul 2>&1
         del "%~f0" >nul 2>&1
         """;
 }

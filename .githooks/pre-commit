@@ -1,0 +1,70 @@
+#!/bin/sh
+#
+# Поднимает patch-версию в AutoPrint.csproj на каждом коммите и добавляет правку
+# в этот же коммит. Дальше по цепочке: push в master -> workflow видит новую
+# <Version> -> собирает и публикует релиз v{version} -> кассы обновляются сами.
+#
+# Версия сборки (AssemblyVersion/FileVersion) выводится из <Version>, поэтому
+# трогать нужно ровно одно место.
+#
+# Как отключить:
+#   разово     — git commit --no-verify   (или AUTOPRINT_NO_BUMP=1 git commit)
+#   совсем     — git config --unset core.hooksPath
+#
+set -e
+
+CSPROJ="AutoPrint.csproj"
+
+# Явный отказ от бампа.
+[ -n "$AUTOPRINT_NO_BUMP" ] && exit 0
+
+# Слияния, rebase и cherry-pick версию не двигают: коммит там не несёт новых
+# изменений, а конфликт в одной и той же строке csproj ломал бы каждый rebase.
+GIT_DIR_PATH=$(git rev-parse --git-dir)
+if [ -f "$GIT_DIR_PATH/MERGE_HEAD" ] || [ -f "$GIT_DIR_PATH/CHERRY_PICK_HEAD" ] \
+   || [ -d "$GIT_DIR_PATH/rebase-merge" ] || [ -d "$GIT_DIR_PATH/rebase-apply" ]; then
+    exit 0
+fi
+
+[ -f "$CSPROJ" ] || exit 0
+
+# Версию уже подняли руками в этом коммите — не перебиваем чужое решение
+# (например, осознанный minor/major-релиз).
+if git diff --cached -U0 -- "$CSPROJ" | grep -q '^+.*<Version>'; then
+    echo "pre-commit: <Version> уже изменена вручную — бамп пропущен."
+    exit 0
+fi
+
+CURRENT=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$CSPROJ" | head -n 1)
+if [ -z "$CURRENT" ]; then
+    echo "pre-commit: в $CSPROJ не найден <Version> — бамп пропущен." >&2
+    exit 0
+fi
+
+MAJOR=${CURRENT%%.*}
+REST=${CURRENT#*.}
+MINOR=${REST%%.*}
+PATCH=${REST#*.}
+
+case "$MAJOR.$MINOR.$PATCH" in
+    *[!0-9.]*|*..*)
+        echo "pre-commit: версию «$CURRENT» не разобрать как X.Y.Z — бамп пропущен." >&2
+        exit 0
+        ;;
+esac
+
+NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+
+# Тег уже занят (например, версию откатили) — предупреждаем, но коммит не блокируем:
+# workflow в этом случае просто пропустит релиз.
+if git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null 2>&1; then
+    echo "pre-commit: ВНИМАНИЕ — тег v$NEXT уже существует, релиз будет пропущен." >&2
+fi
+
+# Меняем только элемент <Version>; AssemblyVersion/FileVersion ссылаются на $(Version).
+# Через временный файл, а не sed -i: ключ -i несовместим между GNU и BSD sed.
+sed "s|<Version>$CURRENT</Version>|<Version>$NEXT</Version>|" "$CSPROJ" > "$CSPROJ.bump.tmp"
+mv "$CSPROJ.bump.tmp" "$CSPROJ"
+git add "$CSPROJ"
+
+echo "pre-commit: версия $CURRENT -> $NEXT"

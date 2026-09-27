@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Threading;
 using AutoPrint.Models;
 using AutoPrint.Services;
@@ -281,7 +281,11 @@ public class PrintQueueManager
             Source = job.Source.EndsWith(ReprintSuffix, StringComparison.Ordinal)
                 ? job.Source
                 : job.Source + ReprintSuffix,
-            Kind = job.Kind, ReceivedAt = DateTime.Now
+            Kind = job.Kind, ReceivedAt = DateTime.Now,
+            // Раньше терялись: повтор уезжал без имени принтера и показывался в истории
+            // как «ECASH» вместо реальной организации. RequestId намеренно НЕ копируем —
+            // иначе дедупликация отбросит повтор как дубль оригинала.
+            PrinterName = job.PrinterName, OrgName = job.OrgName
         };
         var item = Enqueue(copy, source.Geometry);
         Say($"Задание #{source.Id} поставлено на повторную печать как #{item.Id}.");

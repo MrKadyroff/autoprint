@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -58,6 +58,8 @@ public partial class MainWindow : Window
     /// <summary>Рисует значок трея во время выполнения (без .ico-файла в проекте).</summary>
     private static System.Drawing.Icon BuildTrayIcon()
     {
+        // GetHicon отдаёт GDI-хэндл, который Icon.FromHandle не освобождает сам,
+        // поэтому ниже хэндл уничтожается явно после копирования иконки.
         using var bmp = new System.Drawing.Bitmap(32, 32);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
@@ -75,7 +77,41 @@ public partial class MainWindow : Window
             g.DrawString("AP", f, System.Drawing.Brushes.White,
                          new System.Drawing.RectangleF(0, 0, 32, 32), sf);
         }
-        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+        IntPtr hIcon = bmp.GetHicon();
+        try
+        {
+            using var tmp = System.Drawing.Icon.FromHandle(hIcon);
+            return (System.Drawing.Icon)tmp.Clone();
+        }
+        finally { DestroyIcon(hIcon); }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    /// <summary>
+    /// Клик по карточке задания в очереди — открыть просмотр чека. Кнопки внутри карточки
+    /// («👁», «↻», «✕») имеют свои команды, поэтому их клики сюда доходить не должны.
+    /// </summary>
+    private void QueueItem_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (e.Handled) return;
+        if (IsInsideButton(e.OriginalSource as DependencyObject)) return;
+        if (sender is not FrameworkElement fe || fe.DataContext is not PrintQueueItem item) return;
+        if (DataContext is not MainViewModel vm) return;
+
+        vm.ViewJobCommand.Execute(item);
+        e.Handled = true;
+    }
+
+    private static bool IsInsideButton(DependencyObject? node)
+    {
+        while (node is not null)
+        {
+            if (node is System.Windows.Controls.Primitives.ButtonBase) return true;
+            node = VisualTreeHelper.GetParent(node);
+        }
+        return false;
     }
 
     // ===== Умная прокрутка колонок =====

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net;
 using System.Text;
 using AutoPrint.Models;
@@ -91,6 +91,9 @@ public class PrintServer
                 if (ct.IsCancellationRequested || _listener is not { IsListening: true }) break;
                 Log?.Invoke($"Ошибка приёма подключения: {ex.Message}");
                 FileLog.Error("PrintServer.AcceptLoop", ex);
+                // Пауза обязательна: без неё повторяющаяся ошибка GetContextAsync
+                // превращает цикл приёма в busy-loop, съедающий ядро процессора.
+                try { await Task.Delay(500, ct); } catch (OperationCanceledException) { break; }
                 continue;
             }
 

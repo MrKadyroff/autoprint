@@ -1,4 +1,4 @@
-using System.Drawing;
+﻿using System.Drawing;
 using System.IO;
 using System.Runtime.Versioning;
 using System.Windows;
@@ -66,6 +66,7 @@ public class MainViewModel : ViewModelBase
         ClearQueueCommand = new RelayCommand(() => Queue.ClearFinished());
         CancelJobCommand = new RelayCommand(o => { if (o is PrintQueueItem it) Queue.Cancel(it); });
         RetryJobCommand = new RelayCommand(o => { if (o is PrintQueueItem it) Queue.Retry(it); });
+        ViewJobCommand = new RelayCommand(o => { if (o is PrintQueueItem it) ShowReceiptViewer(it); });
 
         // Печать задания из очереди: строим байты и шлём на активную цель.
         Queue.PrintCallback = async item =>
@@ -1051,6 +1052,9 @@ public class MainViewModel : ViewModelBase
     private string _updateNotes = "";
     public string UpdateNotes { get => _updateNotes; private set => SetField(ref _updateNotes, value); }
 
+    /// <summary>Открыть чек из истории (клик по строке очереди / кнопка «👁»).</summary>
+    public ICommand ViewJobCommand { get; }
+
     public ICommand CheckUpdateCommand { get; }
     public ICommand InstallUpdateCommand { get; }
 
@@ -1280,7 +1284,7 @@ public class MainViewModel : ViewModelBase
     {
         using Bitmap src = source;
         var (packed, wb, h) = ImageProcessor.PrepareRaster(src, dots, insetDots);
-        using Bitmap mono = RebuildMonoPreview(packed, wb, h);
+        using Bitmap mono = MonoBitmap.Rebuild(packed, wb, h);
         return WpfInterop.ToImageSource(mono);
     }
 
@@ -1320,34 +1324,6 @@ public class MainViewModel : ViewModelBase
         }));
     }
 
-    /// <summary>
-    /// Восстанавливает картинку из 1-битного буфера для показа результата дизеринга.
-    /// Через LockBits и нативный формат 1bpp — попиксельный SetPixel на растре 576×N
-    /// давал сотни тысяч GDI-вызовов на каждый кадр превью (заметная нагрузка при таскании слайдеров).
-    /// </summary>
-    private static Bitmap RebuildMonoPreview(byte[] packed, int widthBytes, int height)
-    {
-        int width = widthBytes * 8;
-        var bmp = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format1bppIndexed);
-        // Бит=1 (чёрная точка ESC/POS) → индекс 1 палитры = чёрный.
-        var pal = bmp.Palette;
-        pal.Entries[0] = Color.White;
-        pal.Entries[1] = Color.Black;
-        bmp.Palette = pal;
-
-        var rect = new Rectangle(0, 0, width, height);
-        var data = bmp.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                                System.Drawing.Imaging.PixelFormat.Format1bppIndexed);
-        try
-        {
-            for (int y = 0; y < height; y++)
-                System.Runtime.InteropServices.Marshal.Copy(
-                    packed, y * widthBytes, data.Scan0 + y * data.Stride, widthBytes);
-        }
-        finally { bmp.UnlockBits(data); }
-        return bmp;
-    }
-
     private void LoadImage(object? _)
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
@@ -1366,6 +1342,30 @@ public class MainViewModel : ViewModelBase
     // ================= МОДАЛКИ ОШИБОК ПЕЧАТИ =================
     private DateTime _lastNotReadyDialogAt = DateTime.MinValue;
     private static readonly TimeSpan NotReadyDialogCooldown = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Просмотр чека из истории: отдельное окно с лентой, отрисованной по СОБСТВЕННОЙ
+    /// геометрии задания, и кнопкой повторной печати. Открывать по одному окну на задание —
+    /// повторный клик по тому же чеку поднимает уже открытое.
+    /// </summary>
+    private readonly Dictionary<int, Views.ReceiptViewerWindow> _openViewers = new();
+
+    private void ShowReceiptViewer(PrintQueueItem item)
+    {
+        if (_openViewers.TryGetValue(item.Id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+
+        var win = new Views.ReceiptViewerWindow(item, Queue.Retry)
+        {
+            Owner = Application.Current.MainWindow is { IsVisible: true } mw ? mw : null
+        };
+        _openViewers[item.Id] = win;
+        win.Closed += (_, _) => _openViewers.Remove(item.Id);
+        win.Show();
+    }
 
     /// <summary>Задание окончательно не напечаталось — показываем причину и что делать.</summary>
     private void ShowJobFailedDialog(PrintQueueItem item)

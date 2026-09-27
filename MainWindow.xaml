@@ -1,4 +1,4 @@
-<Window x:Class="AutoPrint.MainWindow"
+﻿<Window x:Class="AutoPrint.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:AutoPrint.ViewModels"
@@ -609,8 +609,12 @@
                                     <ItemsControl ItemsSource="{Binding Queue.Items}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
+                                                <!-- Клик по строке открывает просмотр чека: кассиру нужно
+                                                     увидеть, что именно за чек, прежде чем печатать повторно. -->
                                                 <Border Background="{StaticResource CardBackground}" CornerRadius="6"
-                                                        Padding="10,7" Margin="3">
+                                                        Padding="10,7" Margin="3" Cursor="Hand"
+                                                        ToolTip="Открыть чек — посмотреть и напечатать повторно"
+                                                        MouseLeftButtonUp="QueueItem_Click">
                                                     <Grid>
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto"/>
@@ -635,6 +639,11 @@
                                                         <StackPanel Grid.Column="2" Orientation="Horizontal"
                                                                     VerticalAlignment="Center">
                                                             <Button Style="{StaticResource FluentButton}" Padding="8,4"
+                                                                    Content="👁" ToolTip="Посмотреть чек"
+                                                                    Command="{Binding DataContext.ViewJobCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                            <Button Style="{StaticResource FluentButton}" Padding="8,4" Margin="6,0,0,0"
                                                                     Content="↻" ToolTip="Повторить"
                                                                     Command="{Binding DataContext.RetryJobCommand,
                                                                               RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -655,7 +664,7 @@
                                 </ScrollViewer>
                             </Border>
                             <TextBlock Style="{StaticResource Caption}"
-                                       Text="Задания печатаются по одному. При сбое — до 3 автоповторов; можно ставить на паузу, отменять и повторять вручную."/>
+                                       Text="Задания печатаются по одному. При сбое — до 3 автоповторов; можно ставить на паузу, отменять и повторять вручную. Клик по чеку — посмотреть его и напечатать заново."/>
                         </StackPanel>
                     </Border>
 
