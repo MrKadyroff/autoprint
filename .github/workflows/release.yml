@@ -95,6 +95,9 @@ jobs:
           files: ${{ steps.pkg.outputs.asset }}
           make_latest: 'true'            # releases/latest → его читает автоапдейтер
 
+      # Пропуск — это почти всегда ошибка: коммит ушёл, а на кассы ничего не приехало.
+      # Поэтому не просто echo в лог, а warning-аннотация на странице запуска.
       - name: Skipped
         if: steps.ver.outputs.should_release != 'true'
-        run: echo "Релиз ${{ steps.ver.outputs.tag }} уже существует — пропуск. Бампните <Version> в csproj."
+        run: |
+          echo "::warning title=Релиз не опубликован::Тег ${{ steps.ver.outputs.tag }} уже существует — сборка пропущена, кассы обновление НЕ получат. Поднимите <Version> в AutoPrint.csproj (это делает хук .githooks/pre-commit)."
