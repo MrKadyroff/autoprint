@@ -42,8 +42,12 @@ public class UpdateService
 
     public UpdateService(AppConfig cfg) => _cfg = cfg;
 
-    public static Version CurrentVersion =>
-        Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
+    /// <summary>Текущая версия, всегда в виде X.Y.Z (без 4-го разряда AssemblyVersion).</summary>
+    public static Version CurrentVersion => Normalize(Assembly.GetExecutingAssembly().GetName().Version);
+
+    /// <summary>Приводит версию к X.Y.Z: 1.0.4.0 и 1.0.4 должны быть равны при сравнении.</summary>
+    private static Version Normalize(Version? v) =>
+        v is null ? new Version(0, 0, 0) : new Version(Math.Max(v.Major, 0), Math.Max(v.Minor, 0), Math.Max(v.Build, 0));
 
     private static HttpClient CreateClient()
     {
@@ -111,7 +115,7 @@ public class UpdateService
         string s = (tag ?? "").Trim().TrimStart('v', 'V');
         int dash = s.IndexOfAny(new[] { '-', '+' });   // отбросить префикс пре-релиза/метаданных
         if (dash >= 0) s = s[..dash];
-        return Version.TryParse(s, out var v) ? v : new Version(0, 0, 0);
+        return Version.TryParse(s, out var v) ? Normalize(v) : new Version(0, 0, 0);
     }
 
     /// <summary>Скачивает ассет с отчётом прогресса (0..1).</summary>
@@ -248,9 +252,11 @@ public class UpdateService
         tasklist /FI "PID eq {pid}" /NH 2>nul | find "{pid}" >nul
         if errorlevel 1 goto copy
         set /a tries+=1
-        if %tries% GTR 60 (
-            echo [%date% %time%] ОШИБКА: процесс {pid} не завершился за 60 c >> %LOG%
-            goto restart
+        if %tries% GTR 20 (
+            echo [%date% %time%] процесс {pid} завис при выходе — убиваю принудительно >> %LOG%
+            taskkill /F /PID {pid} >> %LOG% 2>&1
+            ping -n 3 127.0.0.1 >nul
+            goto copy
         )
         ping -n 2 127.0.0.1 >nul
         goto waitloop

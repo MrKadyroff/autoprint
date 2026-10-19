@@ -84,6 +84,7 @@ public class MainViewModel : ViewModelBase
 
         _server.JobReceived += OnJobReceivedFromNetwork;
         _server.Log += msg => AppendLog(msg);
+        _server.DeviceNameProvider = () => _config.DeviceName;
 
         RestartServer();                       // старт на порту по умолчанию
 
@@ -469,6 +470,16 @@ public class MainViewModel : ViewModelBase
         private set { if (SetField(ref _setupStage, value)) OnPropertyChanged(nameof(SetupButtonLabel)); }
     }
     public string SetupButtonLabel => string.IsNullOrEmpty(SetupStage) ? "⚡  Автонастройка в один клик" : SetupStage;
+
+    /// <summary>Имя точки/ПК (например MEGA-PARK#1) — отдаётся фронту в GET /device.</summary>
+    public string DeviceName
+    {
+        get => _config.DeviceName;
+        set { var v = (value ?? "").Trim(); if (_config.DeviceName != v) { _config.DeviceName = v; _config.Save(); OnPropertyChanged(); } }
+    }
+
+    /// <summary>Уникальный неизменяемый ID устройства (только отображение).</summary>
+    public string DeviceId => DeviceIdService.GetDeviceId();
 
     private string _portText = "5001";
     public string PortText { get => _portText; set => SetField(ref _portText, value); }
@@ -1106,13 +1117,25 @@ public class MainViewModel : ViewModelBase
             UpdateStatus = "Установка и перезапуск приложения…";
             AppendLog($"[UPD] Установка {info.Tag}");
             _updater.ApplyAndRestart(info, path);
-            Application.Current.Shutdown();   // апдейтер дождётся выхода и подменит файлы
+            ExitForUpdate();   // апдейтер дождётся выхода и подменит файлы
         }
         catch (Exception ex)
         {
             UpdateStatus = $"Ошибка обновления: {ex.Message}";
             IsUpdateBusy = false;
         }
+    }
+
+    /// <summary>
+    /// Выход перед подменой файлов. Обычный Shutdown() не гарантирует завершение процесса
+    /// (фоновые потоки принт-сервера, WebView2, трей) — тогда апдейтер не мог перезаписать
+    /// занятые файлы и приложение поднималось в старой версии. Страхуемся жёстким выходом.
+    /// </summary>
+    private static System.Threading.Timer? _exitTimer;
+    private static void ExitForUpdate()
+    {
+        try { Application.Current.Shutdown(); } catch { }
+        _exitTimer = new System.Threading.Timer(_ => Environment.Exit(0), null, 5000, System.Threading.Timeout.Infinite);
     }
 
     // ---- Автообновление в фоне (без участия пользователя) ----
@@ -1174,7 +1197,7 @@ public class MainViewModel : ViewModelBase
             Notify($"Установлена новая версия {info.Version} — приложение перезапускается…");
             AppendLog($"[UPD] Автообновление: установка {info.Tag}, перезапуск…");
             _updater.ApplyAndRestart(info, path);
-            Application.Current.Shutdown();
+            ExitForUpdate();
         }
         catch (Exception ex)
         {

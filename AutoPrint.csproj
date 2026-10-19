@@ -13,12 +13,14 @@
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Текущая версия приложения (сверяется с тегом GitHub-релиза) -->
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
     <!-- Версия сборки ДОЛЖНА следовать за <Version>: UpdateService.CurrentVersion
          читает AssemblyVersion, и если её прибить — обновление ставится, но приложение
          продолжает считать себя старым и обновляется по кругу. -->
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
+    <!-- Без этого SDK дописывает к версии хеш коммита (1.0.4+abc123) -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

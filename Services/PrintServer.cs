@@ -14,6 +14,7 @@ namespace AutoPrint.Services;
 ///    - Content-Type: application/json         -> ReceiptFormat.Json  (тело = JSON шаблон)
 ///    - Content-Type: text/html                -> ReceiptFormat.Html  (тело = HTML)
 ///    - Content-Type: image/png | image/jpeg   -> ReceiptFormat.Image (тело = байты картинки)
+///  GET /device -> {"deviceId","name"}
 ///  GET /status -> "OK" (health-check / проверка что порт слушается)
 /// </summary>
 public class PrintServer
@@ -21,6 +22,9 @@ public class PrintServer
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _loop;
+
+    /// <summary>Имя точки/ПК, задаётся в настройках приложения (отдаётся в GET /device).</summary>
+    public Func<string>? DeviceNameProvider { get; set; }
 
     public int Port { get; private set; }
     public bool IsRunning => _listener?.IsListening == true;
@@ -134,6 +138,20 @@ public class PrintServer
             if (req.HttpMethod == "GET" && req.Url?.AbsolutePath == "/status")
             {
                 await WriteText(res, 200, "OK");
+                return;
+            }
+
+            // Идентификатор устройства для привязки кассы (стабильный, см. DeviceIdService).
+            if (req.HttpMethod == "GET" && req.Url?.AbsolutePath.TrimEnd('/').ToLowerInvariant() is "/device" or "/device-id")
+            {
+                var info = new
+                {
+                    deviceId = DeviceIdService.GetDeviceId(),
+                    name = DeviceNameProvider?.Invoke() ?? ""
+                };
+                await WriteText(res, 200, System.Text.Json.JsonSerializer.Serialize(info,
+                    new System.Text.Json.JsonSerializerOptions
+                    { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
                 return;
             }
 

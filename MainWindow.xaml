@@ -182,6 +182,18 @@
 
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="Устройство"/>
+                            <TextBlock Style="{StaticResource Caption}" Text="Имя точки / ПК (например MEGA-PARK#1)"/>
+                            <TextBox Text="{Binding DeviceName, UpdateSourceTrigger=LostFocus}"/>
+                            <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" Text="ID устройства (неизменяемый)"/>
+                            <TextBox Text="{Binding DeviceId, Mode=OneWay}" IsReadOnly="True"/>
+                            <TextBlock Style="{StaticResource Caption}"
+                                       Text="Имя и ID отдаются фронту по GET http://localhost:{порт}/device — для привязки кассы."/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
                             <TextBlock Style="{StaticResource SectionTitle}" Text="Сеть и порт"/>
                             <TextBlock Style="{StaticResource Caption}" Text="TCP/HTTP порт службы"/>
                             <Grid>

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 
 namespace AutoPrint.Services;
@@ -36,6 +36,9 @@ public class AppConfig
     public bool OpenDrawer { get; set; } = false;
 
     /// <summary>Желаемое имя, под которым принтер регистрируется/переименовывается в Windows.</summary>
+    /// <summary>Человекочитаемое имя точки/ПК (например "MEGA-PARK#1") — отдаётся в GET /device.</summary>
+    public string DeviceName { get; set; } = "";
+
     public string PrinterFriendlyName { get; set; } = "Mulex P80mm";
 
     private static string Dir => Path.Combine(
