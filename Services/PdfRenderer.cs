@@ -19,21 +19,36 @@ public static class PdfRenderer
     // DocLib.Instance — процессный синглтон PDFium, не потокобезопасен: сериализуем доступ.
     private static readonly object _gate = new();
 
-    /// <summary>Рендерит PDF в единый Bitmap шириной ~<paramref name="targetWidth"/> точек.</summary>
-    public static Bitmap Render(byte[] pdfBytes, int targetWidth)
+    /// <summary>
+    /// Рендерит PDF в единый Bitmap шириной ровно <paramref name="targetWidth"/> точек.
+    /// Если задан <paramref name="targetEmPx"/> и в PDF есть текстовый слой, масштаб подбирается так,
+    /// чтобы размер текста совпал с настройкой шрифта приложения (как в JSON-чеках); содержимое
+    /// центрируется, но не шире <paramref name="targetWidth"/> − 2·<paramref name="marginDots"/>.
+    /// Без текстового слоя содержимое просто растягивается на печатное поле.
+    /// </summary>
+    public static Bitmap Render(byte[] pdfBytes, int targetWidth, double targetEmPx = 0, int marginDots = 0)
     {
         lock (_gate)
         {
             var lib = DocLib.Instance;
+            int contentW = Math.Max(8, targetWidth - 2 * Math.Max(0, marginDots));
 
-            // 1) Пробный проход: узнаём натуральную ширину первой страницы (в точках @72dpi).
-            double nativeW;
+            // 1) Пробный проход @72dpi: натуральная ширина и типичный размер глифов.
+            double nativeW, emNative = 0;
             using (var probe = lib.GetDocReader(pdfBytes, new PageDimensions(1.0)))
             using (var p0 = probe.GetPageReader(0))
+            {
                 nativeW = p0.GetPageWidth();
-            if (nativeW <= 0) nativeW = targetWidth;
+                if (targetEmPx > 0) emNative = MedianGlyphEm(p0);
+            }
+            if (nativeW <= 0) nativeW = contentW;
 
-            double scale = targetWidth / nativeW;   // масштаб под ширину печати
+            double scale = contentW / nativeW;   // по умолчанию — вписать в печатное поле
+            if (emNative > 0)
+            {
+                // Подгоняем размер текста под шрифт из настроек, но не шире печатного поля.
+                scale = Math.Min(targetEmPx / emNative, scale);
+            }
 
             // 2) Реальный рендер всех страниц.
             using var reader = lib.GetDocReader(pdfBytes, new PageDimensions(scale));
@@ -58,6 +73,25 @@ public static class PdfRenderer
                 foreach (var b in pages) b.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Типичный кегль текста страницы (px @72dpi): медиана высоты рамок символов / 0.72
+    /// (рамка PDFium облегает глиф, а он в среднем ~0.72 em). 0 — если текста нет.
+    /// </summary>
+    private static double MedianGlyphEm(Docnet.Core.Readers.IPageReader page)
+    {
+        try
+        {
+            var heights = page.GetCharacters()
+                .Where(c => !char.IsWhiteSpace(c.Char) && c.Box.Bottom > c.Box.Top)
+                .Select(c => (double)(c.Box.Bottom - c.Box.Top))
+                .OrderBy(x => x)
+                .ToList();
+            if (heights.Count < 5) return 0;
+            return heights[heights.Count / 2] / 0.72;
+        }
+        catch { return 0; }
     }
 
     /// <summary>Извлекает текстовый слой PDF (все страницы) — для определения категории чека.
@@ -99,7 +133,7 @@ public static class PdfRenderer
         int y = 0;
         foreach (var p in pages)
         {
-            g.DrawImage(p, 0, y, width, p.Height);
+            g.DrawImage(p, (width - p.Width) / 2, y, p.Width, p.Height);   // по центру, без растяжения
             y += p.Height;
         }
         return canvas;

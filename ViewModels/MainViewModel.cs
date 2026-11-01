@@ -1279,7 +1279,7 @@ public class MainViewModel : ViewModelBase
                     byte[]? data = job.RawImage ?? _imageBytes;   // из сети или из выбранного файла
                     if (data is null) { PreviewText = "Изображение не загружено."; ShowImagePreview = false; break; }
                     int inset = PrintPipeline.MarginDots(SideMarginsPx);
-                    PreviewImage = await Task.Run(() => MonoPreviewFrom(ImageProcessor.FromBytes(data), dots, inset));
+                    PreviewImage = await Task.Run(() => MonoPreviewFrom(FitImagePreview(ImageProcessor.FromBytes(data), dots, inset), dots));
                     ShowImagePreview = true;
                     break;
                 }
@@ -1289,7 +1289,7 @@ public class MainViewModel : ViewModelBase
                     if (job.RawImage is null) { PreviewText = "Нет данных PDF."; ShowImagePreview = false; break; }
                     byte[] pdf = job.RawImage;
                     int insetPdf = PrintPipeline.MarginDots(SideMarginsPx);
-                    PreviewImage = await Task.Run(() => MonoPreviewFrom(PdfRenderer.Render(pdf, dots), dots, insetPdf));
+                    PreviewImage = await Task.Run(() => MonoPreviewFrom(PdfRenderer.Render(pdf, dots, BodyFontPt / 72.0 * 203.0, insetPdf), dots, 0));
                     ShowImagePreview = true;
                     break;
                 }
@@ -1303,6 +1303,11 @@ public class MainViewModel : ViewModelBase
     }
 
     /// <summary>Прогоняет bitmap через дизеринг и возвращает замороженный 1-битный предпросмотр.</summary>
+    private Bitmap FitImagePreview(Bitmap src, int dots, int inset)
+    {
+        using (src) return ImageProcessor.FitByFont(src, dots, inset, BodyFontPt / 72.0 * 203.0);
+    }
+
     private static ImageSource MonoPreviewFrom(Bitmap source, int dots, int insetDots = 0)
     {
         using Bitmap src = source;

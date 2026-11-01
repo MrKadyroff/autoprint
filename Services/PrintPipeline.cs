@@ -74,9 +74,11 @@ public class PrintPipeline
                 return await Task.Run(() =>
                 {
                     using Bitmap src = ImageProcessor.FromBytes(job.RawImage);
-                    // Картинка приходит готовым растром — вёрстки нет, поэтому боковые отступы
-                    // применяем здесь (текст в пикселях не масштабируем — его в картинке уже нет).
-                    return RasterToEscPos(src, geo, MarginDots(geo.SideMarginsPx));
+                    // Картинка — готовый растр: масштабируем так, чтобы текст на ней совпал со
+                    // шрифтом из настроек, в пределах ширины ленты и боковых отступов.
+                    using Bitmap fitted = ImageProcessor.FitByFont(
+                        src, DotsFor(geo.TapeWidthMm), MarginDots(geo.SideMarginsPx), geo.BodyFontPt / 72.0 * 203.0);
+                    return RasterToEscPos(fitted, geo);
                 });
             }
 
@@ -85,8 +87,11 @@ public class PrintPipeline
                 if (job.RawImage is null) throw new InvalidOperationException("Нет данных PDF.");
                 return await Task.Run(() =>
                 {
-                    using Bitmap page = PdfRenderer.Render(job.RawImage, DotsFor(geo.TapeWidthMm));
-                    return RasterToEscPos(page, geo, MarginDots(geo.SideMarginsPx));
+                    // Текст PDF подгоняется под шрифт из настроек (как в JSON-чеках), поля — внутри рендера.
+                    double emPx = geo.BodyFontPt / 72.0 * 203.0;
+                    using Bitmap page = PdfRenderer.Render(
+                        job.RawImage, DotsFor(geo.TapeWidthMm), emPx, MarginDots(geo.SideMarginsPx));
+                    return RasterToEscPos(page, geo);
                 });
             }
 

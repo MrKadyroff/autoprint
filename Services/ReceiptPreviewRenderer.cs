@@ -62,12 +62,12 @@ public static class ReceiptPreviewRenderer
             case ReceiptFormat.Image:
                 if (job.RawImage is null) return ReceiptPreview.FromText("Нет данных изображения.");
                 return ReceiptPreview.FromImage(await Task.Run(() =>
-                    Mono(ImageProcessor.FromBytes(job.RawImage), dots, inset)));
+                    Mono(FitImage(ImageProcessor.FromBytes(job.RawImage), geo, dots, inset), dots)));
 
             case ReceiptFormat.Pdf:
                 if (job.RawImage is null) return ReceiptPreview.FromText("Нет данных PDF.");
                 return ReceiptPreview.FromImage(await Task.Run(() =>
-                    Mono(PdfRenderer.Render(job.RawImage, dots), dots, inset)));
+                    Mono(PdfRenderer.Render(job.RawImage, dots, geo.BodyFontPt / 72.0 * 203.0, inset), dots)));
 
             default:
                 return ReceiptPreview.FromText("Формат не поддерживается.");
@@ -75,6 +75,11 @@ public static class ReceiptPreviewRenderer
     }
 
     /// <summary>Дизеринг в 1 бит и обратно в картинку — показываем результат, а не исходник.</summary>
+    private static Bitmap FitImage(Bitmap src, ReceiptGeometry geo, int dots, int inset)
+    {
+        using (src) return ImageProcessor.FitByFont(src, dots, inset, geo.BodyFontPt / 72.0 * 203.0);
+    }
+
     private static BitmapSource Mono(Bitmap source, int dots, int insetDots = 0, bool disposeSource = true)
     {
         try

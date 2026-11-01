@@ -74,6 +74,80 @@ public static class ImageProcessor
         return PrepareRaster(canvas, targetWidthDots);
     }
 
+    /// <summary>
+    /// Подгоняет готовую картинку под настройки: масштаб выбирается так, чтобы типичный размер
+    /// текста на ней совпал со шрифтом из настроек (<paramref name="targetEmPx"/> в точках принтера),
+    /// но содержимое не шире печатного поля (ширина − 2·отступ). Результат — холст полной ширины,
+    /// содержимое по центру. Если текст на картинке не найден — вписывается в печатное поле.
+    /// Вызывающий освобождает результат.
+    /// </summary>
+    public static Bitmap FitByFont(Bitmap source, int targetWidthDots, int marginDots, double targetEmPx)
+    {
+        int width = targetWidthDots - (targetWidthDots % 8);
+        int contentMax = Math.Max(8, width - 2 * Math.Clamp(marginDots, 0, width / 2 - 8));
+
+        double scale = contentMax / (double)source.Width;
+        double em = EstimateTextEm(source);
+        if (em > 0 && targetEmPx > 0)
+            scale = Math.Min(targetEmPx / em, scale);
+
+        int cw = Math.Max(1, (int)Math.Round(source.Width * scale));
+        int ch = Math.Max(1, (int)Math.Round(source.Height * scale));
+        var canvas = new Bitmap(width, ch, PixelFormat.Format24bppRgb);
+        using var g = Graphics.FromImage(canvas);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.SmoothingMode = SmoothingMode.HighQuality;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.Clear(Color.White);
+        g.DrawImage(source, (width - cw) / 2, 0, cw, ch);
+        return canvas;
+    }
+
+    /// <summary>
+    /// Оценивает кегль текста на растре (px исходника) по высоте строк: профиль тёмных пикселей
+    /// по вертикали → полосы строк → медиана (≈0.8 em с учётом строк без выносных элементов).
+    /// Слишком высокие полосы (логотипы, QR, штрих-коды) отбрасываются. 0 — если текст не найден.
+    /// </summary>
+    private static double EstimateTextEm(Bitmap bmp)
+    {
+        int w = bmp.Width, h = bmp.Height;
+        if (w < 16 || h < 16) return 0;
+        var dark = new int[h];
+        var rect = new Rectangle(0, 0, w, h);
+        BitmapData data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+        try
+        {
+            unsafe
+            {
+                byte* ptr = (byte*)data.Scan0;
+                for (int y = 0; y < h; y++)
+                {
+                    byte* row = ptr + y * data.Stride;
+                    int n = 0;
+                    for (int x = 0; x < w; x++)
+                        if ((row[x * 3] * 114 + row[x * 3 + 1] * 587 + row[x * 3 + 2] * 299) / 1000 < 128) n++;
+                    dark[y] = n;
+                }
+            }
+        }
+        finally { bmp.UnlockBits(data); }
+
+        var runs = new List<int>();
+        int start = -1;
+        for (int y = 0; y <= h; y++)
+        {
+            bool ink = y < h && dark[y] >= 2;
+            if (ink && start < 0) start = y;
+            else if (!ink && start >= 0) { runs.Add(y - start); start = -1; }
+        }
+        runs = runs.Where(r => r >= 4).OrderBy(r => r).ToList();
+        if (runs.Count < 3) return 0;
+        double med = runs[runs.Count / 2];
+        // Отбрасываем явно нетекстовые полосы и берём медиану ещё раз.
+        var text = runs.Where(r => r <= med * 2.5).ToList();
+        return text[text.Count / 2] / 0.8;
+    }
+
     private static Bitmap ScaleTo(Bitmap src, int w, int h)
     {
         var dst = new Bitmap(w, h, PixelFormat.Format24bppRgb);
