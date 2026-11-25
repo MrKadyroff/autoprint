@@ -137,7 +137,8 @@ public class PrintQueueManager
 {
     public ObservableCollection<PrintQueueItem> Items { get; } = new();
 
-    public Func<PrintQueueItem, Task>? PrintCallback { get; set; }
+    /// <summary>Печать задания. Токен отменяется по тайм-ауту — реализация обязана прервать отправку.</summary>
+    public Func<PrintQueueItem, CancellationToken, Task>? PrintCallback { get; set; }
     /// <summary>Готов ли принтер. Пока false — задания ждут, не расходуя попытки.</summary>
     public Func<bool>? CanPrint { get; set; }
 
@@ -187,7 +188,13 @@ public class PrintQueueManager
     /// сокет молчит) — по истечении таймаута задание откладывается, а очередь печатает следующее,
     /// не дожидаясь зависшего. Само зависшее задание вернётся к печати после остывания.
     /// </summary>
-    public TimeSpan PrintTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public TimeSpan PrintTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Сколько ждать остановки отменённой по тайм-ауту печати, прежде чем брать следующий чек.
+    /// Без ожидания следующий чек уходил на принтер, пока зависший ещё передавался.
+    /// </summary>
+    public TimeSpan AbortGrace { get; set; } = TimeSpan.FromSeconds(15);
 
     /// <summary>Сколько дней хранить завершённые обычные чеки (внутри — base64 картинок, диск не резиновый).</summary>
     public int HistoryDaysNormal { get; set; } = 7;
@@ -408,13 +415,21 @@ public class PrintQueueManager
                         if (PrintCallback is null) throw new InvalidOperationException("Печать не сконфигурирована.");
 
                         // Таймаут: зависший принтер не должен держать весь цикл. По истечении
-                        // бросаем — задание уйдёт в cooldown, а цикл возьмёт следующее.
-                        var printTask = PrintCallback(item);
+                        // ОТМЕНЯЕМ отправку (удаление задания спулера / закрытие сокета) и ждём,
+                        // пока она реально остановится, — иначе следующий чек пойдёт на принтер
+                        // поверх недописанного. Затем задание уйдёт в cooldown.
+                        using var cts = new CancellationTokenSource();
+                        var printTask = PrintCallback(item, cts.Token);
                         if (await Task.WhenAny(printTask, Task.Delay(PrintTimeout)) != printTask)
                         {
-                            // Не наблюдаем зависшую задачу синхронно, но гасим её будущее исключение.
+                            cts.Cancel();
+                            bool stopped = await Task.WhenAny(printTask, Task.Delay(AbortGrace)) == printTask;
+                            // Гасим будущее/текущее исключение отменённой задачи.
                             _ = printTask.ContinueWith(t => { _ = t.Exception; },
                                 TaskContinuationOptions.OnlyOnFaulted);
+                            FileLog.Info(stopped
+                                ? $"[QUEUE] #{item.Id}: печать отменена по тайм-ауту"
+                                : $"[QUEUE] #{item.Id}: печать не остановилась за {AbortGrace.TotalSeconds:0} с после отмены");
                             throw new TimeoutException(
                                 $"печать не завершилась за {PrintTimeout.TotalSeconds:0} с");
                         }

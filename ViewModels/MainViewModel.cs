@@ -69,10 +69,14 @@ public class MainViewModel : ViewModelBase
         ViewJobCommand = new RelayCommand(o => { if (o is PrintQueueItem it) ShowReceiptViewer(it); });
 
         // Печать задания из очереди: строим байты и шлём на активную цель.
-        Queue.PrintCallback = async item =>
+        Queue.PrintCallback = async (item, ct) =>
         {
             byte[] bytes = await _pipeline.BuildBytesAsync(item.Job, item.Geometry);
-            await SendToTargetAsync(bytes);
+            ct.ThrowIfCancellationRequested();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await SendToTargetAsync(bytes, ct);
+            // Размер и время отправки — чтобы по логам точки было видно, какие чеки идут долго.
+            FileLog.Info($"[PRINT] #{item.Id}: {bytes.Length / 1024} КБ отправлено за {sw.ElapsedMilliseconds} мс ({ActiveTarget.Kind})");
         };
         Queue.CanPrint = () => HasPrinter;
         Queue.Notify = msg => Application.Current.Dispatcher.Invoke(() => { Notify(msg); AppendLog("[QUEUE] " + msg); });
@@ -684,20 +688,22 @@ public class MainViewModel : ViewModelBase
     }
 
     /// <summary>Единая отправка байтов на активную цель: USB/спулер или сеть (TCP 9100).</summary>
-    private async Task SendToTargetAsync(byte[] bytes)
+    private async Task SendToTargetAsync(byte[] bytes, CancellationToken ct = default)
     {
         switch (ActiveTarget.Kind)
         {
             case ConnectionKind.Network:
                 try
                 {
-                    await RawNetworkPrinter.SendBytesAsync(ActiveTarget.Host, ActiveTarget.Port, bytes);
+                    await RawNetworkPrinter.SendBytesAsync(ActiveTarget.Host, ActiveTarget.Port, bytes, ct: ct);
                 }
-                catch (Exception)
+                // Только если не удалось даже подключиться: при обрыве посреди передачи адрес
+                // верный, а повтор целого чека сделает очередь (чек начинается с Resync, это безопасно).
+                catch (Exception ex) when (ex is not PrinterSendInterruptedException and not OperationCanceledException)
                 {
                     // IP принтера мог смениться (DHCP) — сканируем подсеть заново и пробуем один раз повторно.
                     if (!await TryRediscoverNetworkTargetAsync()) throw;
-                    await RawNetworkPrinter.SendBytesAsync(ActiveTarget.Host, ActiveTarget.Port, bytes);
+                    await RawNetworkPrinter.SendBytesAsync(ActiveTarget.Host, ActiveTarget.Port, bytes, ct: ct);
                 }
                 break;
             case ConnectionKind.WindowsSpooler:
@@ -706,9 +712,9 @@ public class MainViewModel : ViewModelBase
                     // Сначала статус: иначе спулер молча примет задание и повесит его в Error,
                     // а очередь отрапортует «напечатано», хотя бумага не вышла.
                     RawPrinterHelper.EnsureReady(ActiveTarget.PrinterName);
-                    if (!RawPrinterHelper.SendBytes(ActiveTarget.PrinterName, bytes))
+                    if (!RawPrinterHelper.SendBytes(ActiveTarget.PrinterName, bytes, ct: ct))
                         throw new IOException($"Спулер не принял задание для «{ActiveTarget.PrinterName}».");
-                });
+                }, CancellationToken.None);   // токен не передаём в Run: отмену обрабатывает SendBytes (удаляет задание спулера)
                 break;
             default:
                 throw new InvalidOperationException("Принтер не подключён. Запустите «Определить и подключить».");

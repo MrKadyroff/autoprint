@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Sockets;
 
 namespace AutoPrint.Services;
@@ -84,9 +85,20 @@ public static class RawNetworkPrinter
         }
     }
 
-    /// <summary>Отправляет байты на сетевой принтер (открыть сокет → записать → закрыть).</summary>
-    public static async Task SendBytesAsync(string host, int port, byte[] bytes, int timeoutMs = 5000)
+    /// <summary>Размер порции записи в сокет и пауза между порциями.</summary>
+    private const int ChunkSize = 4096;
+    private const int ChunkPauseMs = 10;
+
+    /// <summary>
+    /// Отправляет байты на сетевой принтер (открыть сокет → записать → закрыть).
+    /// Пишет порциями с короткой паузой, чтобы не заливать дешёвый принтер одним залпом,
+    /// и проверяет отмену между порциями. Ошибка после начала записи бросается как
+    /// <see cref="PrinterSendInterruptedException"/> — принтер уже получил часть чека.
+    /// </summary>
+    public static async Task SendBytesAsync(string host, int port, byte[] bytes, int timeoutMs = 5000,
+        CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var client = new TcpClient();
         var connect = client.ConnectAsync(host, port);
         if (await Task.WhenAny(connect, Task.Delay(timeoutMs)) != connect)
@@ -101,12 +113,35 @@ public static class RawNetworkPrinter
         {
             await connect;
             await using var stream = client.GetStream();
-            await stream.WriteAsync(bytes);
-            await stream.FlushAsync();
+            int sent = 0;
+            try
+            {
+                while (sent < bytes.Length)
+                {
+                    int n = Math.Min(ChunkSize, bytes.Length - sent);
+                    await stream.WriteAsync(bytes.AsMemory(sent, n), ct);
+                    sent += n;
+                    if (sent < bytes.Length) await Task.Delay(ChunkPauseMs, ct);
+                }
+                await stream.FlushAsync(ct);
+                // Корректное закрытие: принтер получает FIN после всех данных, а не RST.
+                client.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new PrinterSendInterruptedException(
+                    $"Связь с {host}:{port} оборвалась во время печати (передано {sent} из {bytes.Length} байт): {ex.Message}", ex);
+            }
         }
         finally
         {
             client.Dispose();
         }
     }
+}
+
+/// <summary>Передача чека оборвалась посередине: принтер уже получил часть данных.</summary>
+public class PrinterSendInterruptedException : IOException
+{
+    public PrinterSendInterruptedException(string message, Exception inner) : base(message, inner) { }
 }
